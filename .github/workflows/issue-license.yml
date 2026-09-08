@@ -1,0 +1,51 @@
+# Place this file in the PUBLIC token repository at
+# .github/workflows/issue-license.yml — NOT in the ANEHub repo.
+#
+# It mints a fresh 7-day license token daily and commits it as anehub.jwt, which
+# the backend fetches over HTTPS. The signing key lives only in this repo's
+# LICENSE_PRIVATE_KEY secret; the tenant id in the LICENSE_TENANT_ID variable.
+#
+# To cut off use: disable this workflow (Actions tab), or delete anehub.jwt. The
+# app fails closed when the last served token expires (within 7 days).
+name: Issue ANEHub license token
+
+on:
+  schedule:
+    - cron: "40 5 * * *"   # daily, off the hour to avoid the scheduler's peak
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Token validity in days"
+        default: "7"
+
+permissions:
+  contents: write
+
+jobs:
+  issue:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "pyjwt[crypto]==2.13.0" cryptography
+      - name: Mint the token
+        env:
+          LICENSE_PRIVATE_KEY: ${{ secrets.LICENSE_PRIVATE_KEY }}
+          TENANT: ${{ vars.LICENSE_TENANT_ID }}
+          DAYS: ${{ github.event.inputs.days || '7' }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$LICENSE_PRIVATE_KEY" > priv.pem
+          python mint_token.py --key priv.pem --tenant "$TENANT" --days "$DAYS" --out anehub.jwt
+          rm -f priv.pem
+      - name: Publish
+        run: |
+          set -euo pipefail
+          git config user.name "license-bot"
+          git config user.email "license-bot@users.noreply.github.com"
+          git add anehub.jwt
+          git commit -m "Issue license token $(date -u +%FT%TZ)" || { echo "no change"; exit 0; }
+          git push
